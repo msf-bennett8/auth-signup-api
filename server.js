@@ -21,16 +21,23 @@ app.use('/api', authRoutes); // FIXED: This should be a proper API base path
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGO_URI, {
+  
+  /* This section is depreciated
   useNewUrlParser: true,
   useUnifiedTopology: true,
+  */
+  
 })
 .then(() => console.log('✅ Connected to MongoDB'))
 .catch(err => console.error('❌ MongoDB connection error:', err));
 
 //Change one
 // Get PORT from environment or use 3000 by default
-const PORT = process.env.PORT || 3000;
+//const PORT = process.env.PORT || 3000;
 
+//New working port from render
+const PORT = process.env.PORT || 10000; // fallback still okay
+//Server Changed by render above to 10000
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
