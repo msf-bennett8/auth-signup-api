@@ -1,0 +1,36 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.auth.env
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build directories
+dist/
+build/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Optional: OS-specific
+*.swp
+*.swo
+
+# Optional: IDEs/editors
+.vscode/
+.idea/
+
+# Coverage reports
+coverage/
+
+# Debugger settings
+.nyc_output/
