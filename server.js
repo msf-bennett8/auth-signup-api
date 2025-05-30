@@ -1,34 +1,201 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-require('dotenv').config(); // Load environment variables from .env
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+require('dotenv').config();
 
+// Now you can use process.env.JWT_SECRET
+console.log('JWT Secret loaded:', process.env.JWT_SECRET ? 'Yes' : 'No');
+// Import routes
 const authRoutes = require('./routes/auth');
 
 const app = express();
 
-// Middleware
-app.use(cors({
-  origin: 'https://europeangoldfishsignuppage.netlify.app',
-  credentials: true,  // optional, based on your needs
-}));
+// Security middleware
+app.use(helmet());
 
-app.use(express.json());
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: {
+    error: 'Too many requests from this IP, please try again later.'
+  }
+});
+app.use(limiter);
 
+// Stricter rate limiting for auth routes
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 auth requests per windowMs
+  message: {
+    error: 'Too many authentication attempts, please try again later.'
+  }
+});
 
-// Routes
-app.use('/api', authRoutes); // FIXED: This should be a proper API base path
+// CORS configuration
+const corsOptions = {
+  origin: [
+    'http://localhost:3000', // for local development
+    'http://localhost:5173', // for Vite dev server
+    'https://europeangoldfishsignuppage.netlify.app', // Your Netlify URL
+    process.env.FRONTEND_URL // Additional frontend URL from env
+  ].filter(Boolean),
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 200
+};
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log('✅ Connected to MongoDB'))
-.catch(err => console.error('❌ MongoDB connection error:', err));
+app.use(cors(corsOptions));
+
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// MongoDB Connection with proper error handling
+const connectDB = async () => {
+  try {
+    // Use MONGO_URI from your .env file
+    const mongoURI = process.env.MONGO_URI;
+    
+    if (!mongoURI) {
+      throw new Error('MONGO_URI environment variable is not defined');
+    }
+    
+    await mongoose.connect(mongoURI);
+    console.log('✅ Connected to MongoDB successfully');
+  } catch (error) {
+    console.error('❌ MongoDB connection error:', error.message);
+    process.exit(1);
+  }
+};
+
+// Connect to database
+connectDB();
+
+// MongoDB connection event listeners
+mongoose.connection.on('connected', () => {
+  console.log('📦 Mongoose connected to MongoDB');
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('🚨 Mongoose connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.log('📦 Mongoose disconnected from MongoDB');
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  try {
+    await mongoose.connection.close();
+    console.log('🔴 MongoDB connection closed through app termination');
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during graceful shutdown:', error);
+    process.exit(1);
+  }
+});
+
+// Health check route
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// Root route
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Backend API is running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      signup: '/api/signup',
+      login: '/api/login',
+      profile: '/api/profile'
+    }
+  });
+});
+
+// Apply rate limiting to auth routes
+app.use('/api/signup', authLimiter);
+app.use('/api/login', authLimiter);
+
+// Use authentication routes
+app.use('/', authRoutes);
+
+// 404 handler for undefined routes
+app.use('*', (req, res) => {
+  res.status(404).json({ 
+    error: 'Route not found',
+    message: `Cannot ${req.method} ${req.originalUrl}`,
+    availableRoutes: [
+      'GET /',
+      'GET /api/health',
+      'POST /api/signup',
+      'POST /api/login',
+      'GET /api/profile',
+      'POST /api/logout'
+    ]
+  });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('🚨 Global error handler:', err);
+  
+  // Mongoose validation error
+  if (err.name === 'ValidationError') {
+    const errors = Object.values(err.errors).map(e => e.message);
+    return res.status(400).json({ 
+      error: 'Validation Error', 
+      details: errors 
+    });
+  }
+  
+  // Mongoose duplicate key error
+  if (err.code === 11000) {
+    const field = Object.keys(err.keyPattern)[0];
+    return res.status(409).json({ 
+      error: `Duplicate ${field}`, 
+      message: `This ${field} is already in use` 
+    });
+  }
+  
+  // JWT errors
+  if (err.name === 'JsonWebTokenError') {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+  
+  if (err.name === 'TokenExpiredError') {
+    return res.status(401).json({ error: 'Token expired' });
+  }
+  
+  // Default error
+  res.status(err.status || 500).json({
+    error: process.env.NODE_ENV === 'production' 
+      ? 'Internal server error' 
+      : err.message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
 
 // Start server
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📡 Server URL: http://localhost:${PORT}`);
+  console.log(`🔗 Frontend URL: https://europeangoldfishsignuppage.netlify.app`);
 });
+
+// Export app for testing
+module.exports = app;
